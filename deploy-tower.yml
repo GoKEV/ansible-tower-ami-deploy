@@ -1,0 +1,107 @@
+---
+- name: Deploy LimeLight Tower instances
+  hosts: localhost
+  gather_facts: no
+  connection: local
+
+  tasks:
+###############################################################################
+###     DEPLOY TOWER NODES
+  - name: Deploy Tower
+    include_role:
+      name: LimeLight-DeployEC2
+      public: yes
+    vars:
+      ll_application: Tower
+      ll_userid: "{{'%03d'|format(item|int) }}"
+
+      ll_sequence: ""
+      ll_ec2srvname: "{{ user_prefix }}-{{ user_event_short | replace (' ','') }}-{{ ll_application }}{{ ll_userid }}"
+      ll_hostname: "{{ user_event_short | replace (' ','') }}-{{ ll_application }}{{ ll_userid }}"
+      ll_image_size: "{% if item == 0 %}{{ tzero_instype }}{% else %}{{ tower_instype }}{% endif %}"
+      ll_ami: "{{ tower_ami }}"
+      ll_iamtowerzero: "{% if item == 0 %}true{% else %}false{% endif %}"
+      ll_inventory: newtower
+      tower_user: "user{{ ll_userid }}"
+      tower_pass: "pass{{ ll_userid }}"
+      tzero_user: "{{ tzero_user }}"
+      tzero_pass: "{{ tzero_pass }}"
+      ll_tags:
+        Name: "{{ ll_ec2srvname }}"
+        Owner: "{{ user_realname }}"
+        Contact: "{{ user_email }}"
+        LimeLight_UserID: "{{ ll_userid }}"
+        Event: "{{ user_event_long }}"
+        Application: "{{ ll_application }}"
+    loop: "{{ range( 0 | int, (user_count+1 | int)) | list }}"
+
+###############################################################################
+###     DEPLOY WEB NODES
+  - name: Deploy Worker
+    include_role:
+      name: LimeLight-DeployEC2
+      public: yes
+    vars:
+      ll_application: Web
+      ll_userid: "{{'%03d'|format(workerct.0|int) }}"
+      ll_sequence: "{{ workerct.1 }}"
+      ll_ec2srvname: "{{ user_prefix }}-{{ user_event_short | replace (' ','') }}-{{ ll_application }}{{ ll_userid }}{{ ll_sequence }}"
+      ll_hostname: "{{ user_event_short | replace (' ','') }}-{{ ll_application }}{{ ll_userid }}{{ ll_sequence }}"
+      ll_image_size: "{{ worker_instype }}"
+      ll_ami: "{{ worker_ami }}"
+      ll_inventory: newweb
+      ll_tags:
+        Name: "{{ ll_ec2srvname }}"
+        Owner: "{{ user_realname }}"
+        Contact: "{{ user_email }}"
+        LimeLight_UserID: "{{ ll_userid }}"
+        Event: "{{ user_event_long }}"
+        Application: "{{ ll_application }}"
+    with_nested:
+      - "{{ range( 0 | int, (user_count+1 | int)) | list }}"
+      - "{{ ll_web_seq }}"
+    loop_control:
+      loop_var: workerct
+
+###############################################################################
+###     CONFIGURE TOWER STUFF
+
+- name: Configure Tower Nodes
+  hosts: newtower
+  become: yes
+  vars:
+    ansible_ssh_user: centos
+    ansible_ssh_private_key_file: /root/.ssh/kev-ansible-kev.pem
+    tower_email: root@redhat.com
+
+  tasks:
+  - name: Import Tower Roles
+    include_role:
+      name: "{{ towerpkg }}"
+    with_items:
+      - LimeLight-TowerBaseline
+      - LimeLight-API
+      - LimeLight-TowerContent
+      - LimeLight-ServerCheckin
+#      - LimeLight-ShutdownTime
+    loop_control:
+      loop_var: towerpkg
+
+###############################################################################
+###     CONFIGURE WORKER NODES
+
+- name: Configure Web against newweb inventory
+  hosts: newweb
+  become: yes
+  vars:
+    ansible_ssh_user: ec2-user
+    ansible_ssh_private_key_file: /root/.ssh/kev-ansible-kev.pem
+  pre_tasks:
+  - debug:
+      var: tzero_ip
+
+  roles:
+    - role: LimeLight-ServerCheckin
+    - role: LimeLight-ShutdownTime
+#      vars:
+#        system_shutdown: 90        # 720 = 12 hours, # 1440 min = 1 day, 2160 = 1.5 days, 2880 = 2 days
